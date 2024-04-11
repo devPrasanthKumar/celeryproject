@@ -1,0 +1,121 @@
+1.pip install celery
+2.pip install django-celery-results
+
+3.python manage.py migrate django_celery_results
+
+
+INSTALLED_APPS = [
+    # Other apps
+    'django_celery_results',
+    # Other apps
+]
+
+
+4.pip install django-celery-beat
+
+
+2.install redis
+
+    sudo dnf install redis
+    sudo systemctl start redis
+    sudo systemctl enable redis
+
+
+
+RUN CELERY:
+    celery -A projectname.celery worker --loglevel=info
+    
+    example:
+
+        celery -A djceleryproject.celery worker --loglevel=info
+
+
+2.django project/celery.py
+
+from __future__ import absolute_import, unicode_literals
+import os
+from celery import Celery
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'email_project.settings')
+
+app = Celery('email_project')
+app.config_from_object('django.conf:settings', namespace='CELERY')
+app.autodiscover_tasks()
+
+3.django prohect/__init__.py
+from .celery import app as celery_app
+
+__all__ = ['celery_app']
+
+
+4.settings.py  
+
+# CELERY SETINGS
+CELERY_BROKER_URL = 'redis://127.0.0.1:6379'
+CELERY_ACCEPT_CONTENT = ['application/json']
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'Asia/Kolkata'
+CELERY_RESULT_BACKEND = 'django-db'
+
+
+
+5.django app/task.py
+
+from celery import shared_task
+from django.core.mail import send_mail
+from django.conf import settings
+
+@shared_task
+def send_email_task(subject, message, recipient_list):
+    # Convert recipient_list to a list if it's a string
+    if isinstance(recipient_list, str):
+        recipient_list = [recipient_list]
+
+    # Validate recipient_list
+    if not isinstance(recipient_list, (list, tuple)):
+        raise ValueError('recipient_list must be a list or tuple')
+
+    # Ensure all elements in recipient_list are valid email addresses
+    for recipient in recipient_list:
+        if not isinstance(recipient, str) or '@' not in recipient:
+            raise ValueError(f'Invalid recipient email: {recipient}')
+
+    # Send email using send_mail
+    send_mail(subject, message, settings.EMAIL_HOST_USER, recipient_list)
+
+
+
+6.viewspy
+    from django.shortcuts import render
+
+from rest_framework.generics import CreateAPIView
+from rest_framework.response import Response
+
+from djceleryapp.tasks import send_email_task
+
+
+
+
+
+
+class SendEmailView(CreateAPIView):
+    def post(self, request, *args, **kwargs):
+        # Extract data from request body
+        subject = request.data.get('subject')
+        message = request.data.get('message')
+        recipient_list = request.data.get('recipient_list')
+
+        if not subject or not message or not recipient_list:
+            # Validate required fields
+            return Response({'error': 'Missing required fields'}, status=400)
+
+        try:
+            # Send email asynchronously using Celery task
+            send_email_task.delay(subject, message, recipient_list)
+        except Exception as e:
+            # Handle task execution errors
+            return Response({'error': str(e)}, status=500)
+
+        # Return success response
+        return Response({'message': 'Email sent successfully'}, status=200)
